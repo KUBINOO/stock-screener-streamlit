@@ -1,5 +1,7 @@
 import pandas as pd
 import yfinance as yf
+import requests
+import streamlit as st
 
 def fetch_company_info(tickers_string):
     """
@@ -67,18 +69,41 @@ def fetch_financial_history(ticker):
 
 def fetch_eps_history(ticker):
     """
-    Download the EPS history (Estimate vs. Actual).
+    It downloads EPS history using the official Finnhub API.
+    This allows it to bypass Yahoo Finance's cloud-based blocking.
     """
-    stock = yf.Ticker(ticker)
     try:
-        eps_df = stock.earnings_dates
-        if eps_df is not None and not eps_df.empty:
-            eps_df = eps_df.dropna(subset=['EPS Estimate', 'Reported EPS'])
-            eps_df.index = eps_df.index.tz_localize(None)
-            eps_df = eps_df.sort_index().tail(8)
-            return eps_df
-        return None
-    except Exception:
+        # Bezpečné načtení klíče
+        api_key = st.secrets.get("FINNHUB_API_KEY")
+        if not api_key:
+            print("Finnhub API klíč nenalezen.")
+            return None
+            
+        # Volání Finnhub API
+        url = f"https://finnhub.io/api/v1/stock/earnings?symbol={ticker}&token={api_key}"
+        response = requests.get(url)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if not data:
+                return None
+                
+            # JSON TO PANDAS
+            df = pd.DataFrame(data)
+            
+            # Finnhub returns data in reverse chronological order, but we want it in chronological order
+            df['period'] = pd.to_datetime(df['period'])
+            df = df.set_index('period')
+            df = df.rename(columns={'actual': 'Reported EPS', 'estimate': 'EPS Estimate'})
+            # Sorting
+            df = df.sort_index().tail(8)
+            
+            return df
+        else:
+            return None
+            
+    except Exception as e:
+        print(f"Chyba při stahování EPS z Finnhubu: {e}")
         return None
 
 
