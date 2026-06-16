@@ -73,7 +73,9 @@ if tickers_input:
             hist_data = get_cached_price_history(selected_ticker_price, period_options[selected_period])
             
             if hist_data is not None and not hist_data.empty:
-                # Výpočet aktuální ceny a změny za dané období
+                # FOR CLOUD: Exclude rows where the closing price is missing
+                hist_data = hist_data.dropna(subset=['Close'])
+                # Calculation of the current price and changes over a given period
                 current_price = hist_data['Close'].iloc[-1]
                 start_price = hist_data['Close'].iloc[0]
                 price_change = current_price - start_price
