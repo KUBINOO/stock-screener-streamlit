@@ -4,6 +4,10 @@ A comprehensive web application built with Python and Streamlit for fundamental 
 
 > **Note:** The underlying codebase and prompt engineering are structured in English, while the User Interface (UI) and AI outputs are localized in Czech (Czech UI) to serve the domestic market.
 
+# 👉 Try it online
+`https://akciovyscreener.streamlit.app/`
+
+
 ## 🚀 Key Features
 
 * **Real-Time Data Fetching:** Automated retrieval of financial statements, price history, and key metrics via the `yfinance` API and `Finnhub API` (for reliable EPS surprises).
