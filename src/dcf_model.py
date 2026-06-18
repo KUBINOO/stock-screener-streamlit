@@ -26,6 +26,24 @@ def get_dcf_base_data(ticker):
             "shares_outstanding": shares,
             "current_price": current_price
         }
+    
+        # New dynamic parameters from yfinance
+        beta = info.get('beta', 1.1)
+        total_equity = info.get('totalStockholderEquity', 0)
+        total_debt = info.get('totalDebt', 0)
+        
+        # Safe calculation of Debt-to-Equity ratio
+        debt_to_equity = (total_debt / total_equity) if total_equity and total_equity > 0 else 0.5
+
+        return {
+            "fcf_ttm": fcf,
+            "net_debt": net_debt,
+            "shares_outstanding": shares,
+            "current_price": current_price,
+            "beta": beta,
+            "debt_to_equity": debt_to_equity
+        }
+    
     except Exception:
         return None
 

@@ -79,7 +79,7 @@ def fetch_eps_history(ticker):
             print("Finnhub API klíč nenalezen.")
             return None
             
-        # Volání Finnhub API
+        # Finnhub API
         url = f"https://finnhub.io/api/v1/stock/earnings?symbol={ticker}&token={api_key}"
         response = requests.get(url)
         

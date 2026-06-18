@@ -1,6 +1,8 @@
 import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
+import numpy as np
+from src.dcf_engine import DCFEngine, DCFParameters
 
 # Imports from our modules 
 from src.ai_verdict import get_ai_verdict
@@ -16,7 +18,7 @@ def get_cached_company_info(tickers):
 def get_cached_financial_history(ticker):
     return fetch_financial_history(ticker)
 
-@st.cache_data(ttl=300) # Kratší cache (5 minut), aby cena byla aktuálnější
+@st.cache_data(ttl=300) # Shorter cache (5min), for more accurate price
 def get_cached_price_history(ticker, period):
     return fetch_price_history(ticker, period)
 
@@ -280,45 +282,31 @@ if tickers_input:
             dcf_data = cached_dcf_base_data(selected_ticker_dcf)
             
             if dcf_data and dcf_data["shares_outstanding"] > 0:
-                # Rozdělení na dva sloupce: vlevo slidery, vpravo výsledek
+                # --- ZÁKLADNÍ NASTAVENÍ (SLIDERY) ---
                 col1, col2 = st.columns([2, 1])
                 
                 with col1:
                     st.markdown("##### 🎛️ Nastavení parametrů")
                     
-                    # 1. FCF TTM Slider (Výchozí je realita, posuvník jde od 0 do 2x reálné FCF pro stresstesty)
                     base_fcf = dcf_data["fcf_ttm"]
                     fcf_in_billions = base_fcf / 1e9
-                    slider_fcf = st.slider(
-                        "FCF TTM ($ Miliardy)", 
-                        min_value=0.0, 
-                        max_value=max(10.0, fcf_in_billions * 2), 
-                        value=max(0.0, fcf_in_billions), 
-                        step=0.1
-                    )
                     
-                    # 2. Délka Fáze 1
+                    # TYTO PROMĚNNÉ HLEDAL MONTE CARLO ENGINE:
+                    slider_fcf = st.slider("FCF TTM ($ Miliardy)", min_value=0.0, max_value=max(10.0, fcf_in_billions * 2), value=max(0.0, fcf_in_billions), step=0.1)
                     slider_years = st.slider("DÉLKA FÁZE 1 (roky)", min_value=3, max_value=10, value=10, step=1)
-                    
-                    # 3. Růst Fáze 1 (od -10% do 40%)
                     slider_growth = st.slider("RŮST FÁZE 1 (%)", min_value=-10.0, max_value=40.0, value=15.0, step=0.5)
-                    
-                    # 4. Terminální růst (od 0% do 5%)
                     slider_terminal = st.slider("TERMINÁLNÍ RŮST (%)", min_value=0.0, max_value=5.0, value=3.0, step=0.1)
-                    
-                    # 5. WACC / Diskontní míra (od 5% do 20%)
                     slider_wacc = st.slider("WACC (%)", min_value=5.0, max_value=20.0, value=10.0, step=0.1)
                 
                 with col2:
                     st.markdown("##### 🎯 Vnitřní hodnota (Fair Value)")
                     
-                    # Přepočet hodnot ze sliderů do formátu pro matematiku (procenta na desetinná čísla)
+                    # PŘEPOČTY PROMĚNNÝCH:
                     calc_fcf = slider_fcf * 1e9
                     calc_growth = slider_growth / 100.0
                     calc_terminal = slider_terminal / 100.0
                     calc_wacc = slider_wacc / 100.0
                     
-                    # Výpočet
                     intrinsic_value, ev = calculate_dcf(
                         calc_fcf, slider_years, calc_growth, 
                         calc_terminal, calc_wacc, 
@@ -328,47 +316,95 @@ if tickers_input:
                     current_price = dcf_data["current_price"]
                     margin_of_safety = ((intrinsic_value - current_price) / current_price) * 100 if current_price else 0
                     
-                    # Vizuál výsledku
                     st.metric(label=f"Vypočítaná cena {selected_ticker_dcf}", value=f"${intrinsic_value:.2f}")
                     st.metric(label="Aktuální cena na trhu", value=f"${current_price:.2f}")
                     
-                    # Barevné zhodnocení Margin of Safety
                     if intrinsic_value > current_price:
                         st.success(f"Akcie je PODHODNOCENÁ.\n\nMargin of Safety: +{margin_of_safety:.1f}%")
                     else:
                         st.error(f"Akcie je NADROHODNOCENÁ.\n\nPrémiová přirážka: {margin_of_safety:.1f}%")
-            # --- ODDĚLOVAČ A REVERSE DCF ---
+                
+                # --- REVERSE DCF ---
                 st.markdown("---")
                 st.markdown("#### 🟡 REVERSE DCF: Co trh implicitně očekává")
-                
-                # Výpočet implikovaného růstu
                 implied_growth = calculate_reverse_dcf(
                     current_price, calc_fcf, slider_years, 
                     calc_terminal, calc_wacc, 
                     dcf_data["shares_outstanding"], dcf_data["net_debt"]
                 )
-                
                 implied_growth_pct = implied_growth * 100
-                
-                # Hlavní hláška alá tvůj screen
                 st.markdown(f"### Aktuální cena **${current_price:.2f}** implikuje **{implied_growth_pct:.1f}%** růst FCF po dobu {slider_years} let.")
-                st.caption(f"Při tvých předpokladech (WACC {slider_wacc:.1f}%, terminální růst {slider_terminal:.1f}%) musí FCF růst tímto tempem, aby vnitřní hodnota přesně odpovídala aktuální ceně na trhu.")
+                st.caption(f"Při tvých předpokladech (WACC {slider_wacc:.1f}%, terminální růst {slider_terminal:.1f}%) musí FCF růst tímto tempem, aby vnitřní hodnota odpovídala aktuální ceně na trhu.")
                 
-                # Karty s porovnáním
                 rc1, rc2 = st.columns(2)
                 with rc1:
-                    st.metric(
-                        label="TRH OČEKÁVÁ (Implied Growth)", 
-                        value=f"{implied_growth_pct:.1f}%"
-                    )
+                    st.metric("TRH OČEKÁVÁ (Implied Growth)", f"{implied_growth_pct:.1f}%")
                 with rc2:
                     diff_vs_market = slider_growth - implied_growth_pct
-                    # Pokud jsi optimističtější než trh, je to zelené (+). Pokud ne, červené (-).
-                    st.metric(
-                        label="TVŮJ ODHAD", 
-                        value=f"{slider_growth:.1f}%", 
-                        delta=f"{diff_vs_market:.1f} p.b. vs trh"
-                    )
+                    st.metric("TVŮJ ODHAD", f"{slider_growth:.1f}%", f"{diff_vs_market:.1f} p.b. vs trh")
+
+                # --- MONTE CARLO SIMULACE ---
+                st.markdown("---")
+                st.markdown("#### 🎲 Monte Carlo Simulace")
+                st.caption("Spustí 10 000 vektorizovaných scénářů s náhodnou odchylkou (šumem) u růstu, terminální hodnoty a bety. Odhalí pravděpodobnostní rozložení vnitřní hodnoty.")
+                
+                if st.button("🚀 Spustit 10 000 scénářů", type="primary"):
+                    with st.spinner("Kvantitativní engine počítá..."):
                         
+                        engine = DCFEngine()
+                        
+                        # Využití proměnných z col1 a col2 (slider_growth, slider_terminal, calc_fcf)
+                        base_growth = slider_growth / 100.0
+                        growth_rates_ranges = [(base_growth - 0.05, base_growth + 0.05) for _ in range(slider_years)]
+                        base_terminal = slider_terminal / 100.0
+                        
+                        sim_params = DCFParameters(
+                            beta=dcf_data.get("beta", 1.1),
+                            base_fcf=calc_fcf,
+                            growth_rates=growth_rates_ranges,
+                            terminal_growth=(max(0.0, base_terminal - 0.01), base_terminal + 0.01),
+                            debt_to_equity=dcf_data.get("debt_to_equity", 0.5),
+                            cost_of_debt=0.05,
+                            tax_rate=0.21,
+                            net_debt=dcf_data.get("net_debt", 0.0),
+                            shares_outstanding=dcf_data.get("shares_outstanding", 1.0)
+                        )
+                        
+                        results = engine.monte_carlo(base=sim_params, n=10000)
+                        
+                        per_share_vals = results.per_share_values
+                        mean_val = results.mean
+                        p10 = results.percentiles['p10']
+                        p90 = results.percentiles['p90']
+                        
+                        fig_mc = go.Figure()
+                        
+                        fig_mc.add_trace(go.Histogram(
+                            x=per_share_vals, nbinsx=100, opacity=0.75, name='Simulované scénáře',
+                            marker_color='#1f77b4' if mean_val > current_price else '#d62728'
+                        ))
+                        
+                        fig_mc.add_vline(x=mean_val, line_dash="dash", line_color="black", annotation_text=f"Průměr: ${mean_val:.2f}", annotation_position="top right")
+                        if current_price:
+                            fig_mc.add_vline(x=current_price, line_dash="solid", line_color="orange", annotation_text=f"Tržní cena: ${current_price:.2f}", annotation_position="top left")
+                        
+                        fig_mc.add_vrect(x0=p10, x1=p90, fillcolor="green", opacity=0.1, layer="below", line_width=0, annotation_text="80% případů", annotation_position="top left")
+                        
+                        fig_mc.update_layout(
+                            title=f"Distribuce vnitřní hodnoty pro {selected_ticker_dcf} (10 000 iterací)",
+                            xaxis_title="Vnitřní hodnota na akcii (USD)", yaxis_title="Počet scénářů",
+                            bargap=0.05, hovermode="x unified"
+                        )
+                        
+                        st.plotly_chart(fig_mc, use_container_width=True)
+                        
+                        st.markdown("##### 📊 Statistické shrnutí")
+                        col_mc1, col_mc2, col_mc3 = st.columns(3)
+                        with col_mc1:
+                            st.metric("BASE", f"${mean_val:.2f}")
+                        with col_mc2:
+                            st.metric("BEAR (10. percentil)", f"${p10:.2f}")
+                        with col_mc3:
+                            st.metric("BULL (90. percentil)", f"${p90:.2f}")
             else:
                 st.warning("Nepodařilo se stáhnout potřebná data (FCF, počet akcií) pro tento DCF model.")
