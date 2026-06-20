@@ -3,6 +3,7 @@ import streamlit as st
 import plotly.graph_objects as go
 import numpy as np
 from src.dcf_engine import DCFEngine, DCFParameters
+import random
 
 # Imports from our modules 
 from src.ai_verdict import get_ai_verdict
@@ -34,24 +35,106 @@ def cached_dcf_base_data(ticker):
 st.set_page_config(page_title="Fundamental Screener", layout="wide")
 st.title("Stock screener")
 
-# Boční panel
-st.sidebar.header("Nastavení screeneru")
-tickers_input = st.sidebar.text_area("Zadejte tickery (oddělené čárkou):", "MSFT, AAPL, NVDA, INTC")
 
+# --- PRE-PREPARED LISTS ---
+MAG_7 = ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA"]
+TOP_SP500 = [
+    "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "BRK-B", "LLY", "AVGO", "V", 
+    "JPM", "TSLA", "WMT", "UNH", "MA", "PG", "JNJ", "HD", "ORCL", "MRK", 
+    "COST", "ABBV", "CVX", "CRM", "BAC", "NFLX", "AMD", "PEP", "KO", "TMO",
+    "WFC", "DIS", "CSCO", "MCD", "ADBE", "QCOM", "INTC", "TXN", "IBM", "AMGN",
+    "NOW", "UBER", "CAT", "SPGI", "PFE", "PM", "GS", "ISRG", "GE", "HON"
+]
+TECH_100 = [
+    "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "AVGO", "COST", "PEP", 
+    "ADBE", "CSCO", "NFLX", "AMD", "TMUS", "INTC", "TXN", "QCOM", "AMGN", "HON", 
+    "INTU", "AMAT", "CMCSA", "GILD", "SBUX", "BKNG", "MDLZ", "ISRG", "LRCX", "VRTX"
+] 
+
+# --- (SESSION STATE) ---
+if "ticker_input_val" not in st.session_state:
+    st.session_state.ticker_input_val = "AAPL, MSFT, NVDA" 
+
+
+# -- SIDE PANEL --
+st.sidebar.header("Nastavení screeneru")
+
+def set_tickers(ticker_string):
+    """Univerzální funkce pro přepsání textového pole"""
+    st.session_state.ticker_input_val = ticker_string
+
+def set_random_tickers():
+    """Funkce pro náhodný výběr, bere počet přímo z number_inputu"""
+    count = st.session_state.rand_count
+    random_picks = random.sample(TECH_100, count)
+    st.session_state.ticker_input_val = ", ".join(random_picks)
+
+def clear_tickers():
+    """Vymaže textové pole"""
+    st.session_state.ticker_input_val = ""
+
+# 2. Textové pole svázané s pamětí aplikace
+tickers_input = st.sidebar.text_area(
+    "Zadejte tickery (oddělené čárkou):", 
+    key="ticker_input_val"
+)
+
+# 3. (Callbacks)
+with st.sidebar.expander("⚡ Rychlé naplnění"):
+    st.button(
+        "🌟 Magnificent 7", 
+        use_container_width=True, 
+        on_click=set_tickers, 
+        args=(", ".join(MAG_7),)
+    )
+    
+    st.button(
+        "🏆 Top 20 (S&P 500)", 
+        use_container_width=True, 
+        on_click=set_tickers, 
+        args=(", ".join(TOP_SP500[:20]),)
+    )
+    
+    st.button(
+        "🔥 Všech Top 50", 
+        use_container_width=True, 
+        on_click=set_tickers, 
+        args=(", ".join(TOP_SP500),)
+    )
+    
+    st.markdown("---") 
+    
+    # Number input got 'key'
+    st.number_input("Počet náhodných:", min_value=1, max_value=30, value=5, key="rand_count")
+    
+    st.button(
+        f"🎲 Zvolit náhodné", 
+        use_container_width=True, 
+        on_click=set_random_tickers
+    )
+    
+    st.markdown("---")
+    
+    st.button(
+        "🗑️ Vymazat vše", 
+        use_container_width=True, 
+        on_click=clear_tickers
+    )
+
+# --- DATA MANAGE  ---
 if tickers_input:
     # Organizing into tabs
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Přehled & Cena", "Valuace & Ziskovost", "Finanční zdraví", "Historie výkazů", "Názor AI", "DCF Model"])
 
     # Download Key Metrics
     with st.spinner("Stahuji finanční data..."):
-        # Let's take a closer look at the three values our fetcher now returns
         df, warnings, errors = get_cached_company_info(tickers_input)
         
-        # Displaying any errors and warnings encountered during the download
         for w in warnings:
             st.warning(w)
         for e in errors:
             st.error(e)
+
 
 # --- ZÁLOŽKA 1: Přehled a Cena ---
     with tab1:
