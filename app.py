@@ -166,11 +166,16 @@ if tickers_input:
                 price_change = current_price - start_price
                 pct_change = (price_change / start_price) * 100
                 
-                # Hezký vizuální ukazatel aktuální ceny
+                # actual price
+                delta_str = (
+                    f"-${abs(price_change):.2f} ({pct_change:.2f}%) za zvolené období"
+                    if price_change < 0
+                    else f"${price_change:.2f} ({pct_change:.2f}%) za zvolené období"
+                )
                 st.metric(
                     label=f"Aktuální cena {selected_ticker_price}", 
                     value=f"${current_price:.2f}", 
-                    delta=f"${price_change:.2f} ({pct_change:.2f}%) za zvolené období"
+                    delta=delta_str
                 )
                 
                 # Vykreslení Plotly grafu
