@@ -345,6 +345,7 @@ if tickers_input:
     # --- ZÁLOŽKA 5: Ai názor ---
     with tab5:
         st.subheader("🤖 Rychlý AI Verdikt")
+        st.markdown(''':blue-background[Verdikt generuje Groq LLM. Nejedná se o nejvýkonnější AI model, proto verdikt berte s rezervou a nespoléhejte se na něj při rozhodování o :red[investici.]]''')
         ticker_list = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
         selected_ticker_ai = st.selectbox("Vyber společnost pro AI analýzu:", ticker_list, key="ai_select")
 
@@ -357,48 +358,64 @@ if tickers_input:
                     with st.spinner("AI studuje finanční výkazy..."):
                         vysledek = get_ai_verdict(selected_ticker_ai, firemni_data)
                         
-                        # Grafické odlišení posledního řádku (verdiktu)
-                        lines = [line.strip() for line in vysledek.strip().split('\n') if line.strip()]
-                        verdict = lines[-1].upper() if lines else ""
-                        
-                        # Nastavení barev podle verdiktu
-                        if "STRONG BUY" in verdict:
-                            bg_color = "#1b5e20"       # Dark green
-                            text_color = "#ffffff"     # White text
-                            border_color = "#123f15"
-                        elif "BUY" in verdict:
-                            bg_color = "#d4edda"       # Light green
-                            text_color = "#155724"     # Dark green text
-                            border_color = "#c3e6cb"
-                        elif "DONT" in verdict or "DON'T" in verdict:
-                            bg_color = "#f8d7da"       # Red / Light red
-                            text_color = "#721c24"     # Dark red text
-                            border_color = "#f5c6cb"
-                        elif "WAIT" in verdict:
-                            bg_color = "#fff3cd"       # Yellow / Orange
-                            text_color = "#856404"
-                            border_color = "#ffeeba"
+                        if isinstance(vysledek, dict):
+                            verdict = vysledek.get("verdict", "").upper()
+                            fundamental_summary = vysledek.get("fundamental_summary", "")
+                            business_moat = vysledek.get("business_moat", "")
+                            error = vysledek.get("error")
                         else:
-                            bg_color = "#e2e3e5"       # Gray
-                            text_color = "#383d41"
-                            border_color = "#d6d8db"
+                            lines = [line.strip() for line in str(vysledek).strip().split('\n') if line.strip()]
+                            verdict = lines[-1].upper() if lines else ""
+                            fundamental_summary = str(vysledek)
+                            business_moat = ""
+                            error = None
                             
-                        # Zobrazení ve stylovaném obdélníku s příslušnou barvou pozadí
-                        st.markdown(
-                            f"""
-                            <div style="background-color: {bg_color}; color: {text_color}; padding: 18px; border-radius: 8px; border: 1px solid {border_color}; margin-bottom: 15px; font-family: sans-serif; white-space: pre-wrap;">{vysledek}</div>
-                            """,
-                            unsafe_allow_html=True
-                        )
-                        
-                        if "STRONG BUY" in verdict:
-                            st.success("🔥 AI VERDIKT: " + verdict)
-                        elif "BUY" in verdict:
-                            st.success("📈 AI VERDIKT: " + verdict)
-                        elif "WAIT" in verdict:
-                            st.warning("⏳ AI VERDIKT: " + verdict)
-                        elif "DONT" in verdict or "DON'T" in verdict:
-                            st.error("🛑 AI VERDIKT: " + verdict)
+                        if error or verdict == "ERROR":
+                            st.error(f"🛑 {fundamental_summary}")
+                        else:
+                            # Nastavení barev podle verdiktu
+                            if "STRONG BUY" in verdict:
+                                bg_color = "#1b5e20"       # Dark green
+                                text_color = "#ffffff"     # White text
+                                border_color = "#123f15"
+                            elif "BUY" in verdict:
+                                bg_color = "#d4edda"       # Light green
+                                text_color = "#155724"     # Dark green text
+                                border_color = "#c3e6cb"
+                            elif "DONT" in verdict or "DON'T" in verdict:
+                                bg_color = "#f8d7da"       # Red / Light red
+                                text_color = "#721c24"     # Dark red text
+                                border_color = "#f5c6cb"
+                            elif "WAIT" in verdict:
+                                bg_color = "#fff3cd"       # Yellow / Orange
+                                text_color = "#856404"
+                                border_color = "#ffeeba"
+                            else:
+                                bg_color = "#e2e3e5"       # Gray
+                                text_color = "#383d41"
+                                border_color = "#d6d8db"
+                                
+                            # Zobrazení ve stylovaném obdélníku s příslušnou barvou pozadí
+                            st.markdown(
+                                f"""
+                                <div style="background-color: {bg_color}; color: {text_color}; padding: 18px; border-radius: 8px; border: 1px solid {border_color}; margin-bottom: 15px; font-family: sans-serif;">
+                                    <h4 style="margin-top:0; margin-bottom:8px; color: {text_color};">📊 Fundamentální analýza</h4>
+                                    <p style="margin-bottom:15px; line-height: 1.6;">{fundamental_summary}</p>
+                                    <h4 style="margin-top:0; margin-bottom:8px; color: {text_color};">🏰 Obchodní model a příkop (Moat)</h4>
+                                    <p style="margin-bottom:0; line-height: 1.6;">{business_moat}</p>
+                                </div>
+                                """,
+                                unsafe_allow_html=True
+                            )
+                            
+                            if "STRONG BUY" in verdict:
+                                st.success("🔥 AI VERDIKT: " + verdict)
+                            elif "BUY" in verdict:
+                                st.success("📈 AI VERDIKT: " + verdict)
+                            elif "WAIT" in verdict:
+                                st.warning("⏳ AI VERDIKT: " + verdict)
+                            elif "DONT" in verdict or "DON'T" in verdict:
+                                st.error("🛑 AI VERDIKT: " + verdict)
             else:
                 st.warning(f"Nejsou k dispozici data pro analýzu {selected_ticker_ai}.")
     
