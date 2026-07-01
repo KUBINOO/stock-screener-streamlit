@@ -45,6 +45,9 @@ class DCFParameters:
     tax_rate: float
     net_debt: float = 0.0
     shares_outstanding: float = 1.0
+    currency: str = "USD"
+    fx_rate_to_usd: float = 1.0
+    rf_rate_override: float | None = None
 
     def __post_init__(self) -> None:
         if not self.growth_rates:
@@ -53,6 +56,10 @@ class DCFParameters:
             raise ValueError("shares_outstanding must be positive")
         if not (0.0 <= self.tax_rate <= 1.0):
             raise ValueError(f"tax_rate must be in [0, 1], got {self.tax_rate}")
+        if self.fx_rate_to_usd <= 0:
+            raise ValueError("fx_rate_to_usd must be positive")
+        if self.rf_rate_override is not None and self.rf_rate_override < 0:
+            raise ValueError("rf_rate_override must be non-negative")
 
 
 @dataclass
@@ -76,6 +83,15 @@ class ValuationResult:
     terminal_value: float
     fcf_projections: np.ndarray
 
+    def to_usd(self, fx_rate: float) -> ValuationResult:
+        """Returns a new ValuationResult with nominal dollar metrics converted to USD."""
+        return ValuationResult(
+            enterprise_value=self.enterprise_value * fx_rate,
+            wacc=self.wacc,
+            terminal_value=self.terminal_value * fx_rate,
+            fcf_projections=self.fcf_projections * fx_rate,
+        )
+
 
 @dataclass
 class SimulationResult:
@@ -88,6 +104,19 @@ class SimulationResult:
     kurtosis: float
     percentiles: dict[str, float]
     n_simulations: int
+
+    def to_usd(self, fx_rate: float) -> SimulationResult:
+        """Returns a new SimulationResult with per-share metrics translated to USD."""
+        return SimulationResult(
+            per_share_values=self.per_share_values * fx_rate,
+            mean=self.mean * fx_rate,
+            median=self.median * fx_rate,
+            std=self.std * fx_rate,
+            skew=self.skew,
+            kurtosis=self.kurtosis,
+            percentiles={k: v * fx_rate for k, v in self.percentiles.items()},
+            n_simulations=self.n_simulations,
+        )
 
 
 @dataclass
@@ -112,7 +141,7 @@ class DCFEngine:
 
     def calculate_value(self, p: DCFParameters) -> ValuationResult:
         """Compute enterprise value for a single parameter set."""
-        wacc = self._compute_wacc(p.beta, p.debt_to_equity, p.cost_of_debt, p.tax_rate)
+        wacc = self._compute_wacc(p.beta, p.debt_to_equity, p.cost_of_debt, p.tax_rate, p.rf_rate_override)
         fcf_projections = self._project_fcf(p.base_fcf, p.growth_rates)
         terminal_value = self._compute_terminal_value(fcf_projections[-1], p.terminal_growth, wacc)
 
@@ -181,7 +210,7 @@ class DCFEngine:
         last_fcf = fcf_matrix[:, -1]
 
         # Vectorized WACC
-        waccs = self._compute_wacc_vectorized(betas, base.debt_to_equity, base.cost_of_debt, base.tax_rate)
+        waccs = self._compute_wacc_vectorized(betas, base.debt_to_equity, base.cost_of_debt, base.tax_rate, base.rf_rate_override)
 
         # Vectorized terminal value (Gordon Growth Model, fallback to exit multiple)
         spread = waccs - term_growths
@@ -238,13 +267,15 @@ class DCFEngine:
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _compute_wacc(self, beta: float, d2e: float, cod: float, tax: float) -> float:
-        ce = self.rf + max(BETA_CLIP_MIN, beta) * self.mp
+    def _compute_wacc(self, beta: float, d2e: float, cod: float, tax: float, rf_override: float | None = None) -> float:
+        rf_val = max(0.0, rf_override) if rf_override is not None else self.rf
+        ce = rf_val + max(BETA_CLIP_MIN, beta) * self.mp
         we = 1.0 / (1.0 + max(0.0, d2e))
         return max(0.01, we * ce + (1.0 - we) * max(0.0, cod) * (1.0 - np.clip(tax, 0.0, 1.0)))
 
-    def _compute_wacc_vectorized(self, betas: np.ndarray, d2e: float, cod: float, tax: float) -> np.ndarray:
-        ce = self.rf + np.clip(betas, BETA_CLIP_MIN, BETA_CLIP_MAX) * self.mp
+    def _compute_wacc_vectorized(self, betas: np.ndarray, d2e: float, cod: float, tax: float, rf_override: float | None = None) -> np.ndarray:
+        rf_val = max(0.0, rf_override) if rf_override is not None else self.rf
+        ce = rf_val + np.clip(betas, BETA_CLIP_MIN, BETA_CLIP_MAX) * self.mp
         we = 1.0 / (1.0 + max(0.0, d2e))
         return np.maximum(we * ce + (1.0 - we) * max(0.0, cod) * (1.0 - np.clip(tax, 0.0, 1.0)), 0.01)
 

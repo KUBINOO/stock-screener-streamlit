@@ -1,12 +1,20 @@
 import yfinance as yf
+from src.data_fetcher import get_fx_rate, get_regional_rf_rate
 
 def get_dcf_base_data(ticker):
     """
-    It retrieves the basic data needed to calculate the DCF: FCF, debt, cash, and number of shares.
+    It retrieves the basic data needed to calculate the DCF: FCF, debt, cash, shares, and currency info.
     """
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
+        
+        currency = info.get("currency", "USD")
+        if not currency:
+            currency = "USD"
+        currency = currency.upper().strip()
+        fx_rate = get_fx_rate(currency)
+        rf_rate = get_regional_rf_rate(currency)
         
         # Free Cash Flow (if unavailable, we'll use operating cash flow)
         fcf = info.get('freeCashflow', 0)
@@ -20,17 +28,9 @@ def get_dcf_base_data(ticker):
         shares = info.get('sharesOutstanding', 0)
         current_price = info.get('currentPrice', 0)
         
-        return {
-            "fcf_ttm": fcf,
-            "net_debt": net_debt,
-            "shares_outstanding": shares,
-            "current_price": current_price
-        }
-    
-        # New dynamic parameters from yfinance
+        # Dynamic parameters from yfinance
         beta = info.get('beta', 1.1)
         total_equity = info.get('totalStockholderEquity', 0)
-        total_debt = info.get('totalDebt', 0)
         
         # Safe calculation of Debt-to-Equity ratio
         debt_to_equity = (total_debt / total_equity) if total_equity and total_equity > 0 else 0.5
@@ -41,7 +41,10 @@ def get_dcf_base_data(ticker):
             "shares_outstanding": shares,
             "current_price": current_price,
             "beta": beta,
-            "debt_to_equity": debt_to_equity
+            "debt_to_equity": debt_to_equity,
+            "currency": currency,
+            "fx_rate": fx_rate,
+            "rf_rate": rf_rate
         }
     
     except Exception:
