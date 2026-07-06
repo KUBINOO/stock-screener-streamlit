@@ -1,3 +1,4 @@
+# pyrefly: ignore [missing-import]
 import yfinance as yf
 from src.data_fetcher import get_fx_rate, get_regional_rf_rate
 

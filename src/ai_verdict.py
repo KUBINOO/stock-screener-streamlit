@@ -1,12 +1,18 @@
+# pyrefly: ignore [missing-import]
 import streamlit as st
+# pyrefly: ignore [missing-import]
 from groq import Groq
 import time
 import json
+from src.logger_config import get_logger
+
+logger = get_logger(__name__)
 
 # Obtaining an API key directly from trusted Streamlit Secrets
 try:
     api_key = st.secrets["GROQ_API_KEY"]
 except KeyError:
+    logger.error("GROQ_API_KEY not found in Streamlit secrets.", exc_info=True)
     raise ValueError("I can't find the key! Check to see if you have a .streamlit/secrets.toml file and if it contains GROQ_API_KEY")
 
 # Client Initialization
@@ -75,9 +81,12 @@ Output ONLY the JSON object."""
     
     for pokus in range(max_pokusu):
         try:
+            model_name = "openai/gpt-oss-120b"
+            logger.info(f"Initiating Groq API call for ticker {ticker} using model {model_name} (attempt {pokus + 1}/{max_pokusu}).")
+            start_time = time.perf_counter()
             # Calling Llama 3.3 model with Groq in JSON mode with determinism setup
             response = client.chat.completions.create(
-                model="openai/gpt-oss-120b", 
+                model=model_name, 
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
@@ -88,7 +97,14 @@ Output ONLY the JSON object."""
             )
             
             raw_content = response.choices[0].message.content or ""
-            parsed_data = json.loads(raw_content.strip())
+            elapsed = time.perf_counter() - start_time
+            logger.info(f"Groq API call completed for ticker {ticker} in {elapsed:.4f}s.")
+            
+            try:
+                parsed_data = json.loads(raw_content.strip())
+            except json.JSONDecodeError:
+                logger.error(f"Failed to parse JSON response from LLM for ticker {ticker}. Raw content dump: {raw_content}", exc_info=True)
+                raise
             
             return {
                 "fundamental_summary": parsed_data.get("fundamental_summary", "Shrnutí fundamentů není k dispozici."),
@@ -104,9 +120,13 @@ Output ONLY the JSON object."""
             # If the API is overloaded (503), rate-limited (429), or JSON failed to decode
             if (isinstance(e, json.JSONDecodeError) or "429" in chybova_hlaska or "503" in chybova_hlaska) and pokus < max_pokusu - 1:
                 cas_cekani = 3
+                logger.warning(f"Groq API rate limit (429) or server error (503) or JSON decode error encountered for {ticker}. Retrying in {cas_cekani}s (error: {chybova_hlaska}).")
                 st.warning(f"Groq API nebo parsování JSON nabírá dech, AI zkusí znovu za {cas_cekani} vteřiny...")
                 time.sleep(cas_cekani)
                 continue
+            
+            if not isinstance(e, json.JSONDecodeError):
+                logger.error(f"Unhandled error during AI verdict generation for ticker {ticker}: {chybova_hlaska}", exc_info=True)
                 
             return {
                 "fundamental_summary": f"Chyba při komunikaci s AI nebo analýze dat: {chybova_hlaska}",

@@ -9,10 +9,15 @@ Discounted Cash Flow valuation engine with Monte Carlo simulation.
 
 from __future__ import annotations
 
+# pyrefly: ignore [missing-import]
 import numpy as np
 from dataclasses import dataclass, field
+# pyrefly: ignore [missing-import]
 from scipy import stats
 from typing import Union
+from src.logger_config import get_logger
+
+logger = get_logger(__name__)
 
 
 # Named constants — no magic numbers in formulas
@@ -141,7 +146,17 @@ class DCFEngine:
 
     def calculate_value(self, p: DCFParameters) -> ValuationResult:
         """Compute enterprise value for a single parameter set."""
+        rf_used = max(0.0, p.rf_rate_override) if p.rf_rate_override is not None else self.rf
+        logger.info(f"Initializing single-scenario DCF calculation [Currency: {p.currency}, Risk-Free Rate: {rf_used:.4f}, Beta: {p.beta:.2f}].")
+        
+        growth_vals = [float(np.mean(g)) if isinstance(g, (tuple, list)) else float(g) for g in p.growth_rates]
+        if len(growth_vals) > 1 and np.std(growth_vals) > 0.15:
+            logger.warning(f"Macroeconomic anomaly: Growth rate variance/standard deviation is dangerously high ({np.std(growth_vals):.4f}).")
+            
         wacc = self._compute_wacc(p.beta, p.debt_to_equity, p.cost_of_debt, p.tax_rate, p.rf_rate_override)
+        if wacc < 0.03:
+            logger.warning(f"Severe macroeconomic anomaly detected: Calculated WACC ({wacc:.4f}) is extremely low (< 3%) or negative.")
+            
         fcf_projections = self._project_fcf(p.base_fcf, p.growth_rates)
         terminal_value = self._compute_terminal_value(fcf_projections[-1], p.terminal_growth, wacc)
 
@@ -173,6 +188,17 @@ class DCFEngine:
         Pass rng=np.random.default_rng(seed) for reproducible results.
         """
         n = int(np.clip(n, 100, 100_000))
+        rf_used = max(0.0, base.rf_rate_override) if base.rf_rate_override is not None else self.rf
+        logger.info(f"Initializing vectorized Monte Carlo DCF simulation [{n} requested iterations, Currency: {base.currency}, Risk-Free Rate: {rf_used:.4f}].")
+        
+        growth_vals = [float(np.mean(g)) if isinstance(g, (tuple, list)) else float(g) for g in base.growth_rates]
+        if len(growth_vals) > 1 and np.std(growth_vals) > 0.15:
+            logger.warning(f"Macroeconomic anomaly in Monte Carlo base params: Growth rate standard deviation is dangerously high ({np.std(growth_vals):.4f}).")
+        if isinstance(base.growth_rates[0], (tuple, list)):
+            for idx, g in enumerate(base.growth_rates):
+                if isinstance(g, (tuple, list)) and (g[1] - g[0]) > 0.30:
+                    logger.warning(f"Macroeconomic anomaly: Growth rate range in Year {idx+1} is dangerously wide ({g[0]} to {g[1]}).")
+                    
         unc = unc or MonteCarloUncertainty()
         rng = rng or np.random.default_rng()
 
@@ -211,6 +237,9 @@ class DCFEngine:
 
         # Vectorized WACC
         waccs = self._compute_wacc_vectorized(betas, base.debt_to_equity, base.cost_of_debt, base.tax_rate, base.rf_rate_override)
+        if np.any(waccs < 0.03):
+            low_count = int(np.sum(waccs < 0.03))
+            logger.warning(f"Macroeconomic anomaly: {low_count} Monte Carlo simulation iterations resulted in extremely low (< 3%) or negative WACC.")
 
         # Vectorized terminal value (Gordon Growth Model, fallback to exit multiple)
         spread = waccs - term_growths
@@ -230,7 +259,9 @@ class DCFEngine:
         shares = max(1.0, base.shares_outstanding)
         per_share = np.maximum(np.maximum(pv_fcf + pv_tv, 0.0) - base.net_debt, 0.0) / shares
 
-        return self._build_results(self._remove_outliers(per_share))
+        res = self._build_results(self._remove_outliers(per_share))
+        logger.info(f"Successfully completed vectorized Monte Carlo simulation processing {res.n_simulations} iterations (Mean value: {res.mean:.2f} {base.currency}).")
+        return res
 
     # ------------------------------------------------------------------
     # Sensitivity analysis — real parameter perturbation

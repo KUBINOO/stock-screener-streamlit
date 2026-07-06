@@ -1,6 +1,9 @@
 import pandas as pd
+# pyrefly: ignore [missing-import]
 import streamlit as st
+# pyrefly: ignore [missing-import]
 import plotly.graph_objects as go
+# pyrefly: ignore [missing-import]
 import numpy as np
 from src.dcf_engine import DCFEngine, DCFParameters
 import random
@@ -9,6 +12,9 @@ import random
 from src.ai_verdict import get_ai_verdict
 from src.data_fetcher import fetch_company_info, fetch_financial_history, fetch_eps_history, fetch_price_history, get_currency_symbol
 from src.dcf_model import get_dcf_base_data, calculate_dcf, calculate_reverse_dcf
+from src.logger_config import get_logger
+
+logger = get_logger(__name__)
 
 # --- CACHING WRAPPERS ---
 @st.cache_data(ttl=3600)
@@ -61,16 +67,19 @@ st.sidebar.header("Nastavení screeneru")
 
 def set_tickers(ticker_string):
     """Univerzální funkce pro přepsání textového pole"""
+    logger.info(f"Telemetry: Quick Fill action triggered with tickers: {ticker_string}")
     st.session_state.ticker_input_val = ticker_string
 
 def set_random_tickers():
     """Funkce pro náhodný výběr, bere počet přímo z number_inputu"""
     count = st.session_state.rand_count
     random_picks = random.sample(TECH_100, count)
+    logger.info(f"Telemetry: Quick Fill random selection triggered ({count} tickers selected: {random_picks})")
     st.session_state.ticker_input_val = ", ".join(random_picks)
 
 def clear_tickers():
     """Vymaže textové pole"""
+    logger.info("Telemetry: Clear tickers action triggered")
     st.session_state.ticker_input_val = ""
 
 # 2. Textové pole svázané s pamětí aplikace
@@ -633,6 +642,7 @@ if tickers_input:
             plot_df = df.dropna(subset=[x_col, y_col, 'Ticker']).copy()
             
             if not plot_df.empty:
+                logger.info(f"Telemetry: Rendering Relative Valuation scatter plot [X: '{x_col}', Y: '{y_col}', Tickers count: {len(plot_df)}].")
                 fig7 = go.Figure()
                 
                 fig7.add_trace(go.Scatter(
