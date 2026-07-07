@@ -142,7 +142,7 @@ def fetch_company_info(tickers_string):
     ticker_list = [t.strip().upper() for t in tickers_string.split(',') if t.strip()]
     
     all_columns = [
-        "Ticker", "Jméno", "Měna", "FX Kurz",
+        "Ticker", "Jméno", "Měna", "FX Kurz", "Cena", "Current Price", "Price",
         "Forward P/E", "EV/EBITDA", "PEG Ratio", "ROA (%)", 
         "ROIC (%)", "Hrubá marže (%)", "Provozní marže (%)", "Čistá marže (%)", 
         "Debt/Equity", "Current Ratio", "Tržby YoY Růst (%)",
@@ -189,11 +189,15 @@ def fetch_company_info(tickers_string):
             total_debt_usd = total_debt * fx_rate if total_debt is not None else None
             total_cash_usd = total_cash * fx_rate if total_cash is not None else None
             
+            price_val = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose", None)
             data.append({
                 "Ticker": t,
                 "Jméno": info.get("shortName", "N/A"),
                 "Měna": currency,
                 "FX Kurz": fx_rate,
+                "Cena": price_val,
+                "Current Price": price_val,
+                "Price": price_val,
                 "Forward P/E": info.get("forwardPE", None),
                 "EV/EBITDA": info.get("enterpriseToEbitda", None),
                 "PEG Ratio": info.get("pegRatio", None),
@@ -329,3 +333,100 @@ def fetch_price_history(ticker, period="1y"):
     except Exception as e:
         logger.error(f"Error fetching price history for {ticker} (period={period}): {e}", exc_info=True)
         return None
+
+
+def get_competitors(ticker: str, limit: int = 5) -> list[str]:
+    """
+    Dynamically fetches and populates peer companies based on a single seed ticker.
+    Primary Source: Finnhub API company_peers endpoint (/stock/peers).
+    Fallback Source: yfinance sector/industry top companies or recommendations.
+    Returns a cleaned list of valid ticker strings starting with the seed ticker.
+    """
+    if not ticker or not isinstance(ticker, str):
+        return []
+        
+    seed = ticker.upper().strip()
+    logger.info(f"Starting competitor auto-discovery for ticker: {seed} (limit={limit})")
+    start_time = time.perf_counter()
+    peers: list[str] = []
+    
+    # Primary Source: Finnhub API
+    try:
+        api_key = st.secrets.get("FINNHUB_API_KEY")
+        if api_key:
+            url = f"https://finnhub.io/api/v1/stock/peers?symbol={seed}&token={api_key}"
+            response = requests.get(url, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                if isinstance(data, list) and len(data) > 0:
+                    peers = [str(p).upper().strip() for p in data if p and isinstance(p, str)]
+                    logger.info(f"Finnhub successfully returned {len(peers)} peers for {seed}.")
+            else:
+                logger.warning(f"Finnhub peers endpoint returned HTTP {response.status_code} for ticker {seed}. Attempting fallback.")
+        else:
+            logger.warning(f"Finnhub API key not found in Streamlit secrets during competitor search for {seed}. Attempting fallback.")
+    except Exception as e:
+        logger.warning(f"Finnhub API error or timeout during competitor search for {seed}: {e}. Attempting fallback.")
+        
+    # Fallback Source: yfinance sector/industry or recommendations
+    if not peers or len(peers) <= 1:
+        logger.info(f"Executing yfinance fallback competitor discovery for ticker {seed}.")
+        try:
+            stock = yf.Ticker(seed)
+            # Try sector/industry top companies first
+            info = getattr(stock, "info", {})
+            sector_key = info.get("sectorKey") or info.get("sector", "").lower().replace(" ", "-")
+            industry_key = info.get("industryKey") or info.get("industry", "").lower().replace(" ", "-")
+            
+            fb_peers: list[str] = []
+            if hasattr(yf, "Industry") and industry_key:
+                try:
+                    ind = yf.Industry(industry_key)
+                    top_df = getattr(ind, "top_companies", None)
+                    if top_df is not None and not top_df.empty and "symbol" in top_df.columns:
+                        fb_peers = [str(sym).upper().strip() for sym in top_df["symbol"].dropna().tolist()]
+                except Exception as ex:
+                    logger.warning(f"yf.Industry lookup failed for industry '{industry_key}': {ex}")
+                    
+            if not fb_peers and hasattr(yf, "Sector") and sector_key:
+                try:
+                    sec = yf.Sector(sector_key)
+                    top_df = getattr(sec, "top_companies", None)
+                    if top_df is not None and not top_df.empty and "symbol" in top_df.columns:
+                        fb_peers = [str(sym).upper().strip() for sym in top_df["symbol"].dropna().tolist()]
+                except Exception as ex:
+                    logger.warning(f"yf.Sector lookup failed for sector '{sector_key}': {ex}")
+            
+            # If still empty, check stock recommendations or related items
+            if not fb_peers:
+                recs = getattr(stock, "recommendations", None)
+                if recs is not None and not recs.empty and "symbol" in recs.columns:
+                    fb_peers = [str(sym).upper().strip() for sym in recs["symbol"].dropna().tolist()]
+                    
+            if fb_peers:
+                peers = fb_peers
+                logger.info(f"yfinance fallback successfully discovered {len(peers)} peers for {seed}.")
+            else:
+                logger.warning(f"yfinance fallback could not discover peers for {seed}.")
+        except Exception as e:
+            logger.error(f"Error during yfinance fallback competitor search for {seed}: {e}", exc_info=True)
+            
+    # Clean, deduplicate, and format the final list starting with seed ticker
+    cleaned_peers = [seed]
+    seen = {seed}
+    for p in peers:
+        p_clean = p.upper().strip()
+        # Exclude weird symbols or symbols with lots of dots/numbers unless valid
+        if p_clean and p_clean not in seen and len(p_clean) <= 10:
+            seen.add(p_clean)
+            cleaned_peers.append(p_clean)
+            if len(cleaned_peers) >= limit + 1:
+                break
+                
+    elapsed = time.perf_counter() - start_time
+    if len(cleaned_peers) > 1:
+        logger.info(f"Competitor auto-discovery completed for {seed} in {elapsed:.4f}s. Discovered peers: {cleaned_peers}")
+    else:
+        logger.warning(f"No valid competitor peers discovered for {seed} after {elapsed:.4f}s. Returning seed ticker only.")
+        
+    return cleaned_peers

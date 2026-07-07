@@ -8,10 +8,13 @@ import numpy as np
 from src.dcf_engine import DCFEngine, DCFParameters
 import random
 
+from datetime import datetime
+
 # Imports from our modules 
 from src.ai_verdict import get_ai_verdict
-from src.data_fetcher import fetch_company_info, fetch_financial_history, fetch_eps_history, fetch_price_history, get_currency_symbol
+from src.data_fetcher import fetch_company_info, fetch_financial_history, fetch_eps_history, fetch_price_history, get_currency_symbol, get_competitors
 from src.dcf_model import get_dcf_base_data, calculate_dcf, calculate_reverse_dcf
+from src.report_generator import ExecutiveReportGenerator, generate_tear_sheet
 from src.logger_config import get_logger
 
 logger = get_logger(__name__)
@@ -130,6 +133,22 @@ with st.sidebar.expander("⚡ Rychlé naplnění"):
         on_click=clear_tickers
     )
 
+def on_peer_search_click():
+    """Callback for competitor auto-discovery"""
+    seed = st.session_state.get("peer_seed_input", "").strip()
+    if seed:
+        logger.info(f"Telemetry: Competitor discovery triggered for seed: {seed}")
+        peers = get_competitors(seed, limit=5)
+        if peers and len(peers) > 1:
+            st.session_state.ticker_input_val = ", ".join(peers)
+            logger.info(f"Telemetry: Competitor discovery populated tickers: {st.session_state.ticker_input_val}")
+        else:
+            logger.warning(f"Telemetry: No peers found or API timeout for seed {seed}.")
+            
+with st.sidebar.expander("🔍 Najdi konkurenci", expanded=False):
+    st.text_input("Zadejte hlavní ticker (např. AAPL):", value="AAPL", key="peer_seed_input")
+    st.button("Vyhledat vrstevníky", use_container_width=True, on_click=on_peer_search_click)
+
 # --- DATA MANAGE  ---
 if tickers_input:
     # Organizing into tabs
@@ -143,6 +162,93 @@ if tickers_input:
             st.warning(w)
         for e in errors:
             st.error(e)
+
+    # --- EXECUTIVE REPORT DOWNLOAD SECTION ---
+    if not df.empty:
+        with st.expander("📄 Executive Tear Sheet (Export reportu pro vedení)", expanded=False):
+            st.markdown("Vyberte společnost pro vygenerování uceleného reportu (DCF valuace, AI verdikt a klíčové metriky) ve formátu HTML, optimalizovaného pro okamžitý tisk do PDF.")
+            valid_tickers = [str(t).strip().upper() for t in df['Ticker'].unique() if str(t).strip()]
+            if valid_tickers:
+                col_exp1, col_exp2 = st.columns([2, 1])
+                with col_exp1:
+                    selected_report_ticker = st.selectbox("Vyberte ticker pro Executive Report:", valid_tickers, key="report_ticker_select")
+                with col_exp2:
+                    if selected_report_ticker and not df[df['Ticker'] == selected_report_ticker].empty:
+                        st.write("") # vertical spacing
+                        st.write("")
+                        if st.button(f"⚡ Připravit report pro {selected_report_ticker}", key="gen_report_btn", use_container_width=True, type="primary"):
+                            with st.spinner("Generuji Executive Report..."):
+                                try:
+                                    # Safely extract single row for active ticker from DataFrame
+                                    ticker_row = None
+                                    try:
+                                        if 'Ticker' in df.columns and df.index.name != 'Ticker':
+                                            df_idx = df.set_index('Ticker', drop=False)
+                                        else:
+                                            df_idx = df
+                                        ticker_row = df_idx.loc[selected_report_ticker]
+                                        if isinstance(ticker_row, pd.DataFrame):
+                                            ticker_row = ticker_row.iloc[0]
+                                    except KeyError:
+                                        logger.warning(f"Ticker {selected_report_ticker} not found in DataFrame.")
+                                        st.error(f"Data pro ticker {selected_report_ticker} nebyla nalezena.")
+                                        ticker_row = None
+                                        
+                                    if ticker_row is not None:
+                                        # Extract current_price explicitly
+                                        curr_price = 0.0
+                                        for price_col in ['Cena', 'Current Price', 'Price']:
+                                            if price_col in ticker_row and pd.notna(ticker_row[price_col]):
+                                                try:
+                                                    val = float(ticker_row[price_col])
+                                                    if val > 0:
+                                                        curr_price = val
+                                                        break
+                                                except (ValueError, TypeError):
+                                                    continue
+                                        
+                                        # Just-In-Time (JIT) AI Verdict Execution
+                                        verdict_key = f"ai_verdict_{selected_report_ticker}"
+                                        ai_out = st.session_state.get(verdict_key)
+                                        if ai_out is None:
+                                            with st.spinner("Generuji chybějící AI analýzu na pozadí..."):
+                                                try:
+                                                    row_dict = ticker_row.to_dict() if isinstance(ticker_row, pd.Series) else ticker_row
+                                                    ai_out = get_ai_verdict(selected_report_ticker, row_dict)
+                                                    st.session_state[verdict_key] = ai_out
+                                                except Exception as ai_ex:
+                                                    logger.warning(f"Could not fetch AI verdict for Tear Sheet ({selected_report_ticker}): {ai_ex}")
+                                                    ai_out = {"verdict": "N/A", "fundamental_summary": "AI analýza nebyla úspěšně vygenerována.", "business_moat": ""}
+                                                    
+                                        ai_res_str = "N/A"
+                                        if isinstance(ai_out, dict):
+                                            import json
+                                            ai_res_str = json.dumps(ai_out)
+                                        elif ai_out is not None:
+                                            ai_res_str = str(ai_out)
+                                            
+                                        html_report = generate_tear_sheet(
+                                            ticker=selected_report_ticker,
+                                            ticker_data=ticker_row,
+                                            ai_verdict=ai_res_str,
+                                            current_price=curr_price
+                                        )
+                                        st.session_state.generated_html_report = html_report
+                                        st.session_state.generated_report_ticker = selected_report_ticker
+                                        logger.info(f"Telemetry: Successfully prepared Tear Sheet for {selected_report_ticker}")
+                                except Exception as rep_ex:
+                                    logger.error(f"Error preparing Tear Sheet for {selected_report_ticker}: {rep_ex}", exc_info=True)
+                                    st.error("Chyba při generování reportu. Zkontrolujte logy.")
+                                    
+                if st.session_state.get("generated_html_report") and st.session_state.get("generated_report_ticker") == selected_report_ticker:
+                    st.download_button(
+                        label=f"📄 Stáhnout Executive Report pro {selected_report_ticker} (.html)",
+                        data=st.session_state.generated_html_report,
+                        file_name=f"{selected_report_ticker}_TearSheet_{datetime.now().strftime('%Y-%m')}.html",
+                        mime="text/html",
+                        type="primary",
+                        use_container_width=True
+                    )
 
 
 # --- ZÁLOŽKA 1: Přehled a Cena ---
@@ -366,6 +472,7 @@ if tickers_input:
                 if st.button(f"Vygenerovat verdikt pro {selected_ticker_ai}", type="primary"):
                     with st.spinner("AI studuje finanční výkazy..."):
                         vysledek = get_ai_verdict(selected_ticker_ai, firemni_data)
+                        st.session_state[f"ai_verdict_{selected_ticker_ai}"] = vysledek
                         
                         if isinstance(vysledek, dict):
                             verdict = vysledek.get("verdict", "").upper()
