@@ -42,6 +42,37 @@ def cached_dcf_base_data(ticker):
 
 # --- UI  ---
 st.set_page_config(page_title="Fundamental Screener", layout="wide")
+
+# Custom CSS for swipeable horizontal tabs on smaller screens / mobile devices
+st.markdown(
+    """
+    <style>
+    /* Force Streamlit tabs to stay on a single line and enable horizontal scrolling */
+    div[data-baseweb="tab-list"],
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+        white-space: nowrap;
+        flex-wrap: nowrap !important;
+        overflow-x: auto !important;
+        overflow-y: hidden !important;
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+    }
+    /* Hide scrollbars for webkit browsers (Chrome, Safari, Edge) */
+    div[data-baseweb="tab-list"]::-webkit-scrollbar,
+    .stTabs [data-baseweb="tab-list"]::-webkit-scrollbar {
+        display: none;
+    }
+    /* Prevent tab label text wrapping */
+    div[data-baseweb="tab-list"] button p,
+    .stTabs [data-baseweb="tab-list"] button p {
+        white-space: nowrap;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 st.title("Stock screener")
 
 
@@ -152,7 +183,7 @@ with st.sidebar.expander("🔍 Najdi konkurenci", expanded=False):
 # --- DATA MANAGE  ---
 if tickers_input:
     # Organizing into tabs
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["Přehled & Cena", "Valuace & Ziskovost", "Finanční zdraví", "Historie výkazů", "Názor AI", "DCF Model", "Relative Valuation"])
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["Přehled a Cena", "Valuace", "Finanční zdraví", "Výkazy", "AI Verdikt", "DCF Model", "Srovnání"])
 
     # Download Key Metrics
     with st.spinner("Stahuji finanční data..."):

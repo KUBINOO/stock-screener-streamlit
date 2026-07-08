@@ -92,7 +92,7 @@ Output ONLY the JSON object."""
                     {"role": "user", "content": user_prompt}
                 ],
                 temperature=0.0,
-                max_tokens=1200,
+                max_tokens=2048,
                 response_format={"type": "json_object"}
             )
             
