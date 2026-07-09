@@ -148,7 +148,8 @@ def fetch_company_info(tickers_string):
         "Debt/Equity", "Current Ratio", "Tržby YoY Růst (%)",
         "Tržní kap.", "Volné CF", "Celkový dluh", "Hotovost",
         "Tržní kap. (USD)", "Volné CF (USD)", "Celkový dluh (USD)", "Hotovost (USD)",
-        "Market Cap (USD)", "Free Cash Flow (USD)", "Total Debt (USD)", "Cash & Equivalents (USD)"
+        "Market Cap (USD)", "Free Cash Flow (USD)", "Total Debt (USD)", "Cash & Equivalents (USD)",
+        "Dividendy"
     ]
     
     for t in ticker_list:
@@ -189,6 +190,13 @@ def fetch_company_info(tickers_string):
             total_debt_usd = total_debt * fx_rate if total_debt is not None else None
             total_cash_usd = total_cash * fx_rate if total_cash is not None else None
             
+            # Safely check for dividend existence
+            div_yield = info.get("dividendYield", None)
+            div_rate = info.get("dividendRate", None)
+            has_div_yield = isinstance(div_yield, (int, float)) and div_yield > 0
+            has_div_rate = isinstance(div_rate, (int, float)) and div_rate > 0
+            dividend_status = "Ano" if (has_div_yield or has_div_rate) else "Ne"
+
             price_val = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose", None)
             data.append({
                 "Ticker": t,
@@ -221,6 +229,7 @@ def fetch_company_info(tickers_string):
                 "Free Cash Flow (USD)": fcf_usd,
                 "Total Debt (USD)": total_debt_usd,
                 "Cash & Equivalents (USD)": total_cash_usd,
+                "Dividendy": dividend_status,
             })
             elapsed = time.perf_counter() - start_time
             logger.info(f"Successfully completed data fetch for {t} in {elapsed:.4f}s.")

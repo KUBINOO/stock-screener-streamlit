@@ -366,7 +366,11 @@ if tickers_input:
     # --- ZÁLOŽKA 2: Valuace ---
     with tab2:
         st.subheader("Ocenění a ziskovost společností")
-        val_cols = ["Ticker", "Jméno", "Měna", "Tržní kap. (USD)", "Forward P/E", "EV/EBITDA", "PEG Ratio", "ROA (%)", "ROIC (%)", "Hrubá marže (%)", "Provozní marže (%)", "Čistá marže (%)"]
+        val_cols = [
+            "Ticker", "Jméno", "Měna", "Tržní kap. (USD)", "Dividendy", 
+            "Forward P/E", "EV/EBITDA", "PEG Ratio", "ROA (%)", "ROIC (%)", 
+            "Hrubá marže (%)", "Provozní marže (%)", "Čistá marže (%)"
+        ]
         
         st.dataframe(df[val_cols].style.format({
             "Tržní kap. (USD)": "${:,.0f}", "Forward P/E": "{:.2f}", "EV/EBITDA": "{:.2f}", "PEG Ratio": "{:.2f}",
