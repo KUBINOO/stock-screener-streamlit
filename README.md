@@ -16,6 +16,10 @@ A comprehensive web application built with Python and Streamlit for fundamental 
 * **Vectorized Monte Carlo Simulation:** Executes 10,000 stochastic DCF scenarios instantly using `NumPy`. This high-performance quantitative engine models probability distributions by adding statistical noise to growth rates, terminal values, and beta.
 * **Reverse DCF:** Algorithmic calculation (binary search) to determine the market-implied growth rate based on the current stock price.
 * **AI Analyst Verdicts:** Integration with the `Groq API` (Llama 3.3) for rapid, uncompromising, and data-driven investment verdicts (BUY, HOLD, SELL) based on fundamental health and macroeconomic moat.
+* **Quantitative Peer Scoring Engine:** Vectorized peer scoring engine (`Quality_Score`, `Value_Score`, `Safety_Score`, `Total_Score`) ranking peer companies across normalized 0–100 percentile scales.
+* **Glass Box CIO Analysis (Multi-Agent Committee):** Institutional-grade multi-agent debate simulation (Moat, Valuation, and Safety Agents) synthesizing deterministic peer scores into transparent chain-of-thought internal reasoning and a definitive CIO investment verdict.
+* **Interactive Relative Valuation Matrix:** Customizable 2D `Plotly` scatter plots comparing peers across user-selected profitability/growth vs. valuation metrics, dynamically colored by `Total_Score`.
+* **Executive Tear Sheet Export:** One-click generation of institutional HTML/PDF executive summary reports combining DCF valuation models, fundamental scorecards, and AI investment verdicts.
 
 ## 🛠️ Tech Stack
 
@@ -29,21 +33,22 @@ A comprehensive web application built with Python and Streamlit for fundamental 
 
 1. Clone the repository:
    ```bash
-   git clone [https://github.com/KUBINOO/stock-screener-streamlit.git](https://github.com/KUBINOO/stock-screener-streamlit.git)
-
+   git clone https://github.com/KUBINOO/stock-screener-streamlit.git
+   ```
 
 2. Install the required dependencies:
    ```bash
    pip install -r requirements.txt
-
+   ```
 
 3. Set up your API Keys:
    Create a `.streamlit/secrets.toml` file in the root directory and add your API keys:
-   ```bash
+   ```toml
    GROQ_API_KEY = "your_groq_api_key_here"
    FINNHUB_API_KEY = "your_finnhub_api_key_here"
-
+   ```
 
 4. Run the app:
    ```bash
    streamlit run app.py
+   ```
