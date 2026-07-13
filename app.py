@@ -12,9 +12,12 @@ from datetime import datetime
 
 # Imports from our modules 
 from src.ai_verdict import get_ai_verdict
+from src.ai_gateway import AIGateway
 from src.data_fetcher import fetch_company_info, fetch_financial_history, fetch_eps_history, fetch_price_history, get_currency_symbol, get_competitors
 from src.dcf_model import get_dcf_base_data, calculate_dcf, calculate_reverse_dcf
 from src.report_generator import ExecutiveReportGenerator, generate_tear_sheet
+from src.scoring_engine import calculate_peer_scores
+from src.cio_agent import generate_cio_report
 from src.logger_config import get_logger
 
 logger = get_logger(__name__)
@@ -196,7 +199,7 @@ if tickers_input:
 
     # --- EXECUTIVE REPORT DOWNLOAD SECTION ---
     if not df.empty:
-        with st.expander("📄 Executive Tear Sheet (Export reportu pro vedení)", expanded=False):
+        with st.expander("📄 Executive Tear Sheet", expanded=False):
             st.markdown("Vyberte společnost pro vygenerování uceleného reportu (DCF valuace, AI verdikt a klíčové metriky) ve formátu HTML, optimalizovaného pro okamžitý tisk do PDF.")
             valid_tickers = [str(t).strip().upper() for t in df['Ticker'].unique() if str(t).strip()]
             if valid_tickers:
@@ -494,8 +497,8 @@ if tickers_input:
             
     # --- ZÁLOŽKA 5: Ai názor ---
     with tab5:
-        st.subheader("🤖 Rychlý AI Verdikt")
-        st.markdown(''':blue-background[Verdikt generuje Groq LLM. Nejedná se o nejvýkonnější AI model, proto verdikt berte s rezervou a nespoléhejte se na něj při rozhodování o :red[investici.]]''')
+        st.subheader("Rychlý AI Verdikt")
+        st.markdown(''':blue-background[Verdikt momentálně generuje GPT-OSS-120B od Groq. Nejedná se o nejvýkonnější AI model, proto verdikt berte s rezervou a nespoléhejte se na něj při rozhodování o :red[investici.]]''')
         ticker_list = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
         selected_ticker_ai = st.selectbox("Vyber společnost pro AI analýzu:", ticker_list, key="ai_select")
 
@@ -734,8 +737,73 @@ if tickers_input:
             else:
                 st.warning("Nepodařilo se stáhnout potřebná data (FCF, počet akcií) pro tento DCF model.")
 
-    # --- ZÁLOŽKA 7: Relative Valuation ---
+    # --- ZÁLOŽKA 7: Srovnání (Peer Comparison & Glass Box CIO Analysis) ---
     with tab7:
+        st.subheader("🏆 Srovnání a investiční komise (Glass Box)")
+        st.markdown(
+            "Syntéza kvantitativního skórování (kvalita, valuace, riziko) a kvalitativní simulace investiční komise (CIO Agent)."
+        )
+
+        if not df.empty:
+            if st.button(
+                "Generovat hloubkovou analýzu trhu",
+                key="btn_run_cio_analysis",
+                type="primary",
+                use_container_width=True,
+            ):
+                with st.spinner("Kompiluji data a simuluji investiční komisi..."):
+                    scored_df = calculate_peer_scores(df)
+                    st.session_state["cio_scored_df"] = scored_df
+                    gateway = AIGateway()
+                    report = generate_cio_report(scored_df, gateway)
+                    st.session_state["cio_report"] = report
+
+            # --- Step 1 - Deterministic Layer ---
+            scored_df_val = st.session_state.get("cio_scored_df")
+            report_val = st.session_state.get("cio_report")
+
+            if scored_df_val is not None and not scored_df_val.empty:
+                st.markdown("#### 📊 Kvantitativní skóre vrstevníků (Deterministic Layer)")
+                display_cols = [
+                    col
+                    for col in ["Quality_Score", "Value_Score", "Safety_Score", "Total_Score"]
+                    if col in scored_df_val.columns
+                ]
+                st.dataframe(
+                    scored_df_val[display_cols] if display_cols else scored_df_val,
+                    use_container_width=True,
+                )
+
+            # --- Step 3 - Qualitative Layer ---
+            if report_val is not None:
+                st.markdown("#### 🏛️ Závěrečný verdikt investiční komise (CIO Verdict)")
+                st.info(report_val.get("cio_verdict", "Verdikt není k dispozici."))
+
+                col_cio1, col_cio2 = st.columns(2)
+                with col_cio1:
+                    st.markdown("##### 🏰 Analýza konkurenčních výhod (Moat Analysis)")
+                    st.markdown(
+                        report_val.get("moat_analysis", "Data nejsou k dispozici.")
+                    )
+                with col_cio2:
+                    st.markdown("##### ⚠️ Identifikace rizik (Risk Analysis)")
+                    st.markdown(
+                        report_val.get("risk_analysis", "Data nejsou k dispozici.")
+                    )
+
+                # --- Step 4 - Transparency Layer (Glass Box) ---
+                with st.expander(
+                    "🧠 Interní poznámky komise (Chain of Thought)", expanded=False
+                ):
+                    st.markdown(
+                        report_val.get(
+                            "internal_reasoning",
+                            "Interní uvažování komise není k dispozici.",
+                        )
+                    )
+
+            st.markdown("---")
+
         st.subheader("Relativní valuace (Relative Valuation)")
         
         numeric_cols = df.select_dtypes(include=['number', np.number]).columns.tolist()

@@ -128,18 +128,15 @@ Output ONLY the JSON object."""
     def _normalize_verdict(parsed_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Normalizes and validates the JSON output payload returned by any adapter.
+        Preserves custom keys while providing defaults for backwards compatibility.
         """
-        return {
-            "fundamental_summary": parsed_data.get(
-                "fundamental_summary", "Shrnutí fundamentů není k dispozici."
-            ),
-            "business_moat": parsed_data.get(
-                "business_moat", "Analýza obchodního modelu není k dispozici."
-            ),
-            "verdict": parsed_data.get("verdict", "WAIT FOR BETTER PRICE"),
-            "internal_reasoning": parsed_data.get("internal_reasoning", ""),
-            "error": None,
-        }
+        normalized = dict(parsed_data)
+        normalized.setdefault("fundamental_summary", "Shrnutí fundamentů není k dispozici.")
+        normalized.setdefault("business_moat", "Analýza obchodního modelu není k dispozici.")
+        normalized.setdefault("verdict", "WAIT FOR BETTER PRICE")
+        normalized.setdefault("internal_reasoning", "")
+        normalized["error"] = None
+        return normalized
 
     def _call_groq(self, prompt: str, context: str) -> Dict[str, Any]:
         """

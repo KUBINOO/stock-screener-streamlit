@@ -5,3 +5,4 @@ plotly
 groq
 scipy
 google-generativeai
+numpy
