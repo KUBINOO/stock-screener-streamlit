@@ -1,10 +1,13 @@
 import pandas as pd
+import numpy as np
 # pyrefly: ignore [missing-import]
 import yfinance as yf
 import requests
 # pyrefly: ignore [missing-import]
 import streamlit as st
 import time
+import random
+from concurrent.futures import ThreadPoolExecutor
 from src.logger_config import get_logger
 
 logger = get_logger(__name__)
@@ -131,9 +134,215 @@ def get_regional_rf_rate(currency: str) -> float:
     return REGIONAL_RF_RATES.get(curr, 0.045)
 
 
+def _get_streamlit_ctx():
+    """Safely retrieves Streamlit script run context across different Streamlit versions."""
+    try:
+        # pyrefly: ignore [missing-import]
+        from streamlit.runtime.ctx import get_script_run_ctx
+        return get_script_run_ctx()
+    except Exception:
+        pass
+    try:
+        # pyrefly: ignore [missing-import]
+        from streamlit.runtime.scriptrunner_utils.script_run_context import get_script_run_ctx
+        return get_script_run_ctx()
+    except Exception:
+        pass
+    try:
+        # pyrefly: ignore [missing-import]
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+        return get_script_run_ctx()
+    except Exception:
+        pass
+    try:
+        # pyrefly: ignore [missing-import]
+        from streamlit.scriptrunner import get_script_run_ctx
+        return get_script_run_ctx()
+    except Exception:
+        return None
+
+
+def _add_streamlit_ctx(ctx):
+    """Safely attaches Streamlit script run context across different Streamlit versions."""
+    if ctx is None:
+        return
+    try:
+        # pyrefly: ignore [missing-import]
+        from streamlit.runtime.ctx import add_script_run_ctx
+        add_script_run_ctx(ctx=ctx)
+        return
+    except Exception:
+        pass
+    try:
+        # pyrefly: ignore [missing-import]
+        from streamlit.runtime.scriptrunner_utils.script_run_context import add_script_run_ctx
+        add_script_run_ctx(ctx=ctx)
+        return
+    except Exception:
+        pass
+    try:
+        # pyrefly: ignore [missing-import]
+        from streamlit.runtime.scriptrunner import add_script_run_ctx
+        add_script_run_ctx(ctx=ctx)
+        return
+    except Exception:
+        pass
+    try:
+        # pyrefly: ignore [missing-import]
+        from streamlit.scriptrunner import add_script_run_ctx
+        add_script_run_ctx(ctx=ctx)
+        return
+    except Exception:
+        pass
+
+
+def _get_ticker_info_with_retry(t: str, max_retries: int = 3) -> dict:
+    """
+    Fetches ticker info from Yahoo Finance with automatic retries and exponential backoff
+    to handle Cloudflare/Yahoo rate limits and curl timeouts (e.g. curl: (28) Operation timed out).
+    """
+    last_exception = None
+    for attempt in range(max_retries):
+        try:
+            if attempt > 0:
+                sleep_time = (2 ** (attempt - 1)) + random.uniform(0.5, 1.5)
+                logger.info(f"Retrying fetch for {t} (Attempt {attempt + 1}/{max_retries}) after {sleep_time:.2f}s backoff...")
+                time.sleep(sleep_time)
+            elif max_retries > 1:
+                # Add tiny jitter to spread out simultaneous thread pool start times
+                time.sleep(random.uniform(0.05, 0.4))
+            
+            session = None
+            if attempt > 0:
+                try:
+                    # pyrefly: ignore [missing-import]
+                    from curl_cffi import requests as curl_requests
+                    session = curl_requests.Session(impersonate="chrome")
+                except ImportError:
+                    try:
+                        session = requests.Session()
+                        session.headers.update({
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+                        })
+                    except Exception:
+                        pass
+
+            stock = yf.Ticker(t, session=session) if session else yf.Ticker(t)
+            info = stock.info
+            if info and ('symbol' in info or len(info) > 5):
+                return info
+        except Exception as e:
+            last_exception = e
+            logger.warning(f"Attempt {attempt + 1}/{max_retries} failed for ticker {t}: {e}")
+            if attempt == max_retries - 1:
+                raise last_exception
+            
+    return {}
+
+
+def _fetch_single_ticker_info(t: str, ctx=None) -> tuple[dict | None, list[str], list[str]]:
+    """
+    Helper function to fetch metrics for a single ticker.
+    Returns: (row_dict or None, list of warnings, list of errors)
+    """
+    _add_streamlit_ctx(ctx)
+
+    warnings = []
+    errors = []
+    logger.info(f"Starting data fetch operation for ticker: {t}")
+    start_time = time.perf_counter()
+    try:
+        info = _get_ticker_info_with_retry(t, max_retries=3)
+        
+        if not info or ('symbol' not in info and len(info) <= 5):
+            msg = f"Yahoo Finance nevrátilo kompletní data pro ticker: {t}"
+            logger.warning(f"Incomplete info returned from Yahoo Finance for ticker {t} (missing critical keys).")
+            warnings.append(msg)
+            return None, warnings, errors
+        
+        currency = info.get("currency", "USD")
+        if not currency:
+            logger.warning(f"Missing currency key for ticker {t}. Falling back to default USD.")
+            currency = "USD"
+        currency = currency.upper().strip()
+        fx_rate = get_fx_rate(currency)
+        
+        market_cap = info.get("marketCap", None)
+        fcf = info.get("freeCashflow", None)
+        if fcf is None or pd.isna(fcf):
+            ocf = info.get("operatingCashflow", None)
+            capex = info.get("capitalExpenditures", None)
+            if ocf is not None and not pd.isna(ocf) and capex is not None and not pd.isna(capex):
+                fcf = ocf - abs(capex)
+            else:
+                logger.warning(f"Missing critical Capital Expenditures (CapEx) or operating cash flow for {t}. Setting FCF to np.nan.")
+                fcf = np.nan
+        if market_cap is None:
+            logger.warning(f"Missing critical financial key 'marketCap' for {t}.")
+        total_debt = info.get("totalDebt", None)
+        total_cash = info.get("totalCash", None)
+        if total_debt is None or total_cash is None:
+            logger.warning(f"Missing balance sheet keys (totalDebt or totalCash) for {t}.")
+        
+        market_cap_usd = market_cap * fx_rate if market_cap is not None else None
+        fcf_usd = fcf * fx_rate if (fcf is not None and not pd.isna(fcf)) else np.nan
+        total_debt_usd = total_debt * fx_rate if total_debt is not None else None
+        total_cash_usd = total_cash * fx_rate if total_cash is not None else None
+        
+        # Safely check for dividend existence
+        div_yield = info.get("dividendYield", None)
+        div_rate = info.get("dividendRate", None)
+        has_div_yield = isinstance(div_yield, (int, float)) and div_yield > 0
+        has_div_rate = isinstance(div_rate, (int, float)) and div_rate > 0
+        dividend_status = "Ano" if (has_div_yield or has_div_rate) else "Ne"
+
+        price_val = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose", None)
+        row_data = {
+            "Ticker": t,
+            "Jméno": info.get("shortName", "N/A"),
+            "Měna": currency,
+            "FX Kurz": fx_rate,
+            "Cena": price_val,
+            "Current Price": price_val,
+            "Price": price_val,
+            "Forward P/E": info.get("forwardPE", None),
+            "EV/EBITDA": info.get("enterpriseToEbitda", None),
+            "PEG Ratio": info.get("pegRatio", None),
+            "ROA (%)": info.get("returnOnAssets", 0) * 100 if info.get("returnOnAssets") else None,
+            "ROIC (%)": info.get("returnOnEquity", 0) * 100 if info.get("returnOnEquity") else None,
+            "Hrubá marže (%)": info.get("grossMargins", 0) * 100 if info.get("grossMargins") else None,
+            "Provozní marže (%)": info.get("operatingMargins", 0) * 100 if info.get("operatingMargins") else None,
+            "Čistá marže (%)": info.get("profitMargins", 0) * 100 if info.get("profitMargins") else None,
+            "Debt/Equity": info.get("debtToEquity", None),
+            "Current Ratio": info.get("currentRatio", None),
+            "Tržby YoY Růst (%)": info.get("revenueGrowth", 0) * 100 if info.get("revenueGrowth") else None,
+            "Tržní kap.": market_cap,
+            "Volné CF": fcf,
+            "Celkový dluh": total_debt,
+            "Hotovost": total_cash,
+            "Tržní kap. (USD)": market_cap_usd,
+            "Volné CF (USD)": fcf_usd,
+            "Celkový dluh (USD)": total_debt_usd,
+            "Hotovost (USD)": total_cash_usd,
+            "Market Cap (USD)": market_cap_usd,
+            "Free Cash Flow (USD)": fcf_usd,
+            "Total Debt (USD)": total_debt_usd,
+            "Cash & Equivalents (USD)": total_cash_usd,
+            "Dividendy": dividend_status,
+        }
+        elapsed = time.perf_counter() - start_time
+        logger.info(f"Successfully completed data fetch for {t} in {elapsed:.4f}s.")
+        return row_data, warnings, errors
+    except Exception as e:
+        logger.error(f"Error fetching data for ticker {t}: {e}", exc_info=True)
+        errors.append(f"Chyba při stahování dat pro {t}: {e}")
+        return None, warnings, errors
+
+
+@st.cache_data(ttl=300, show_spinner=False)
 def fetch_company_info(tickers_string):
     """
-    Retrieves basic metrics for the specified tickers.
+    Retrieves basic metrics for the specified tickers concurrently using a thread pool.
     Returns: (DataFrame with data, list of warnings, list of errors)
     """
     data = []
@@ -152,90 +361,21 @@ def fetch_company_info(tickers_string):
         "Dividendy"
     ]
     
-    for t in ticker_list:
-        logger.info(f"Starting data fetch operation for ticker: {t}")
-        start_time = time.perf_counter()
-        try:
-            stock = yf.Ticker(t)
-            info = stock.info
-            
-            if not info or 'symbol' not in info:
-                msg = f"Yahoo Finance nevrátilo kompletní data pro ticker: {t}"
-                logger.warning(f"Incomplete info returned from Yahoo Finance for ticker {t} (missing critical keys).")
-                warnings.append(msg)
-                continue
-            
-            currency = info.get("currency", "USD")
-            if not currency:
-                logger.warning(f"Missing currency key for ticker {t}. Falling back to default USD.")
-                currency = "USD"
-            currency = currency.upper().strip()
-            fx_rate = get_fx_rate(currency)
-            
-            market_cap = info.get("marketCap", None)
-            fcf = info.get("freeCashflow", None)
-            if not fcf:
-                fcf = info.get("operatingCashflow", None)
-                if not fcf:
-                    logger.warning(f"Missing critical financial keys 'freeCashflow' and 'operatingCashflow' for {t}.")
-            if market_cap is None:
-                logger.warning(f"Missing critical financial key 'marketCap' for {t}.")
-            total_debt = info.get("totalDebt", None)
-            total_cash = info.get("totalCash", None)
-            if total_debt is None or total_cash is None:
-                logger.warning(f"Missing balance sheet keys (totalDebt or totalCash) for {t}.")
-            
-            market_cap_usd = market_cap * fx_rate if market_cap is not None else None
-            fcf_usd = fcf * fx_rate if fcf is not None else None
-            total_debt_usd = total_debt * fx_rate if total_debt is not None else None
-            total_cash_usd = total_cash * fx_rate if total_cash is not None else None
-            
-            # Safely check for dividend existence
-            div_yield = info.get("dividendYield", None)
-            div_rate = info.get("dividendRate", None)
-            has_div_yield = isinstance(div_yield, (int, float)) and div_yield > 0
-            has_div_rate = isinstance(div_rate, (int, float)) and div_rate > 0
-            dividend_status = "Ano" if (has_div_yield or has_div_rate) else "Ne"
+    if not ticker_list:
+        return pd.DataFrame(columns=all_columns), warnings, errors
 
-            price_val = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose", None)
-            data.append({
-                "Ticker": t,
-                "Jméno": info.get("shortName", "N/A"),
-                "Měna": currency,
-                "FX Kurz": fx_rate,
-                "Cena": price_val,
-                "Current Price": price_val,
-                "Price": price_val,
-                "Forward P/E": info.get("forwardPE", None),
-                "EV/EBITDA": info.get("enterpriseToEbitda", None),
-                "PEG Ratio": info.get("pegRatio", None),
-                "ROA (%)": info.get("returnOnAssets", 0) * 100 if info.get("returnOnAssets") else None,
-                "ROIC (%)": info.get("returnOnEquity", 0) * 100 if info.get("returnOnEquity") else None,
-                "Hrubá marže (%)": info.get("grossMargins", 0) * 100 if info.get("grossMargins") else None,
-                "Provozní marže (%)": info.get("operatingMargins", 0) * 100 if info.get("operatingMargins") else None,
-                "Čistá marže (%)": info.get("profitMargins", 0) * 100 if info.get("profitMargins") else None,
-                "Debt/Equity": info.get("debtToEquity", None),
-                "Current Ratio": info.get("currentRatio", None),
-                "Tržby YoY Růst (%)": info.get("revenueGrowth", 0) * 100 if info.get("revenueGrowth") else None,
-                "Tržní kap.": market_cap,
-                "Volné CF": fcf,
-                "Celkový dluh": total_debt,
-                "Hotovost": total_cash,
-                "Tržní kap. (USD)": market_cap_usd,
-                "Volné CF (USD)": fcf_usd,
-                "Celkový dluh (USD)": total_debt_usd,
-                "Hotovost (USD)": total_cash_usd,
-                "Market Cap (USD)": market_cap_usd,
-                "Free Cash Flow (USD)": fcf_usd,
-                "Total Debt (USD)": total_debt_usd,
-                "Cash & Equivalents (USD)": total_cash_usd,
-                "Dividendy": dividend_status,
-            })
-            elapsed = time.perf_counter() - start_time
-            logger.info(f"Successfully completed data fetch for {t} in {elapsed:.4f}s.")
-        except Exception as e:
-            logger.error(f"Error fetching data for ticker {t}: {e}", exc_info=True)
-            errors.append(f"Chyba při stahování dat pro {t}: {e}")
+    ctx = _get_streamlit_ctx()
+
+    # Reduced max_workers to 5 to avoid triggering Cloudflare/curl 28 rate limits when screening many tickers
+    max_workers = min(len(ticker_list), 5)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_list = [(t, executor.submit(_fetch_single_ticker_info, t, ctx)) for t in ticker_list]
+        for t, future in future_list:
+            row_data, warn_list, err_list = future.result()
+            if row_data:
+                data.append(row_data)
+            warnings.extend(warn_list)
+            errors.extend(err_list)
             
     if not data:
         logger.warning(f"All ticker fetches failed or returned empty data for: {tickers_string}. Returning empty dataframe.")
@@ -246,6 +386,7 @@ def fetch_company_info(tickers_string):
     return df, warnings, errors
 
 
+@st.cache_data(ttl=300, show_spinner=False)
 def fetch_financial_history(ticker):
     """
     It downloads historical reports (both annual and quarterly) and converts them.
@@ -323,6 +464,7 @@ def fetch_eps_history(ticker):
         return None
 
 
+@st.cache_data(ttl=300, show_spinner=False)
 def fetch_price_history(ticker, period="1y"):
     """
     Retrieves historical stock price data for the specified period.

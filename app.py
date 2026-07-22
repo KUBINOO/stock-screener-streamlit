@@ -583,7 +583,9 @@ if tickers_input:
         if selected_ticker_dcf:
             dcf_data = cached_dcf_base_data(selected_ticker_dcf)
             
-            if dcf_data and dcf_data["shares_outstanding"] > 0:
+            if dcf_data and (dcf_data.get("fcf_ttm") is None or pd.isna(dcf_data.get("fcf_ttm")) or (isinstance(dcf_data.get("fcf_ttm"), float) and np.isnan(dcf_data.get("fcf_ttm")))):
+                st.warning(f"⚠️ Nelze vypočítat DCF pro {selected_ticker_dcf}: Chybí data pro Capital Expenditures (CapEx). Výpočet by byl nepřesný.")
+            elif dcf_data and dcf_data["shares_outstanding"] > 0:
                 dcf_curr = dcf_data.get("currency", "USD")
                 dcf_fx = dcf_data.get("fx_rate", 1.0)
                 dcf_rf = dcf_data.get("rf_rate", 0.045)

@@ -1,14 +1,15 @@
 # pyrefly: ignore [missing-import]
 import yfinance as yf
-from src.data_fetcher import get_fx_rate, get_regional_rf_rate
+import numpy as np
+import pandas as pd
+from src.data_fetcher import get_fx_rate, get_regional_rf_rate, _get_ticker_info_with_retry
 
 def get_dcf_base_data(ticker):
     """
     It retrieves the basic data needed to calculate the DCF: FCF, debt, cash, shares, and currency info.
     """
     try:
-        stock = yf.Ticker(ticker)
-        info = stock.info
+        info = _get_ticker_info_with_retry(ticker, max_retries=3)
         
         currency = info.get("currency", "USD")
         if not currency:
@@ -17,10 +18,15 @@ def get_dcf_base_data(ticker):
         fx_rate = get_fx_rate(currency)
         rf_rate = get_regional_rf_rate(currency)
         
-        # Free Cash Flow (if unavailable, we'll use operating cash flow)
-        fcf = info.get('freeCashflow', 0)
-        if not fcf:
-            fcf = info.get('operatingCashflow', 0)
+        # Free Cash Flow fallback logic with strict CapEx check
+        fcf = info.get('freeCashflow', None)
+        if fcf is None or pd.isna(fcf):
+            ocf = info.get('operatingCashflow', None)
+            capex = info.get('capitalExpenditures', None)
+            if ocf is not None and not pd.isna(ocf) and capex is not None and not pd.isna(capex):
+                fcf = ocf - abs(capex)
+            else:
+                fcf = np.nan
             
         total_debt = info.get('totalDebt', 0)
         total_cash = info.get('totalCash', 0)
