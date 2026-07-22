@@ -247,6 +247,9 @@ def _fetch_single_ticker_info(t: str, ctx=None) -> tuple[dict | None, list[str],
     """
     _add_streamlit_ctx(ctx)
 
+    # Introduce a random delay between 0.2 and 0.8 seconds to stagger API hits and prevent HTTP 429 errors
+    time.sleep(random.uniform(0.2, 0.8))
+
     warnings = []
     errors = []
     logger.info(f"Starting data fetch operation for ticker: {t}")
@@ -366,8 +369,8 @@ def fetch_company_info(tickers_string):
 
     ctx = _get_streamlit_ctx()
 
-    # Reduced max_workers to 5 to avoid triggering Cloudflare/curl 28 rate limits when screening many tickers
-    max_workers = min(len(ticker_list), 5)
+    # Hardcode max_workers=2 to create a narrow pipeline and prevent HTTP 429 / Cloudflare rate limit blocks
+    max_workers = min(len(ticker_list), 2)
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_list = [(t, executor.submit(_fetch_single_ticker_info, t, ctx)) for t in ticker_list]
         for t, future in future_list:
